@@ -1,3 +1,5 @@
+https://github.com/Yuzhii0718/immortalwrt-mt798x-6.6-padavanonly
+
 **English** | [中文](https://p3terx.com/archives/build-openwrt-with-github-actions.html)
 
 # Actions-OpenWrt
