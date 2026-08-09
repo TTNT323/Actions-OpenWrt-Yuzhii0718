@@ -8,48 +8,50 @@
 # Description: Build OpenWrt using GitHub Actions
 #
 
+# 工作流名称
 name: Build OpenWrt
 
+# 触发方式：支持仓库调度（repository_dispatch）和手动触发（workflow_dispatch）
 on:
   repository_dispatch:
   workflow_dispatch:
     inputs:
       ssh:
-        description: 'SSH connection to Actions'
+        description: 'SSH connection to Actions'   # 手动触发时是否开启SSH调试
         required: false
         default: 'false'
 
+# 全局环境变量，所有步骤均可使用
 env:
-  REPO_URL: https://github.com/Yuzhii0718/immortalwrt-mt798x-6.6-padavanonly
-  REPO_BRANCH: openwrt-24.10-6.6
-  FEEDS_CONF: feeds.conf.default
-  CONFIG_FILE: .config
-  DIY_P1_SH: diy-part1.sh
-  DIY_P2_SH: diy-part2.sh
-  UPLOAD_BIN_DIR: false
-  UPLOAD_FIRMWARE: true
-  UPLOAD_COWTRANSFER: false
-  UPLOAD_WETRANSFER: false
-  UPLOAD_RELEASE: true
-  TZ: Asia/Shanghai
-  # 强制使用 Node.js 24 运行 JavaScript Actions
+  REPO_URL: https://github.com/Yuzhii0718/immortalwrt-mt798x-6.6-padavanonly   # 源码仓库地址
+  REPO_BRANCH: openwrt-24.10-6.6                      # 要克隆的分支
+  FEEDS_CONF: feeds.conf.default                      # feeds配置文件名称
+  CONFIG_FILE: .config                                # OpenWrt配置文件名称
+  DIY_P1_SH: diy-part1.sh                             # 自定义预处理脚本1（在更新feeds前执行）
+  DIY_P2_SH: diy-part2.sh                             # 自定义预处理脚本2（在加载配置后执行）
+  UPLOAD_FIRMWARE: true                               # 是否上传整理后的固件文件
+  UPLOAD_RELEASE: true                                # 是否发布到GitHub Release
+  TZ: Asia/Shanghai                                   # 时区设置
+  # 强制使用 Node.js 24 运行 JavaScript Actions（兼容老旧Action）
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04                             # 运行环境：Ubuntu 22.04
     permissions:
-      contents: write      # 用于 Release 和上传资产
-      actions: write       # 用于删除 workflow runs
+      contents: write                                 # 允许写入仓库内容（用于Release上传）
+      actions: write                                  # 允许删除workflow runs
     steps:
+    # ========== 1. 检出仓库代码 ==========
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6                       # 升级到v6，原生支持Node.js 24
 
+    # ========== 2. 初始化编译环境 ==========
     - name: Initialization environment
       env:
-        DEBIAN_FRONTEND: noninteractive
+        DEBIAN_FRONTEND: noninteractive               # 避免apt交互式提示
       run: |
-        # 清理系统冗余文件（释放磁盘空间，避免编译时空间不足）
+        # 清理系统冗余文件，释放磁盘空间（避免编译时空间不足）
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
         # 更新apt软件源
@@ -59,92 +61,102 @@ jobs:
         # 清理apt缓存，释放更多空间
         sudo apt autoremove --purge
         sudo apt clean
-        # 设置系统时区（和env里的TZ保持一致）
+        # 设置系统时区
         sudo timedatectl set-timezone "$TZ"
-        # 创建编译目录并授权（避免权限不足导致编译失败）
+        # 创建编译工作目录并授权（避免权限不足）
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
 
+    # ========== 3. 克隆源码 ==========
     - name: Clone source code
       working-directory: /workdir
       run: |
-        df -hT $PWD
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        df -hT $PWD                                      # 检查磁盘空间
+        git clone $REPO_URL -b $REPO_BRANCH openwrt      # 克隆指定分支到openwrt目录
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt # 创建工作空间下的软链接
 
+    # ========== 4. 加载自定义feeds ==========
     - name: Load custom feeds
       run: |
+        # 如果存在本地feeds配置文件，则覆盖源码中的默认feeds.conf
         [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
-        chmod +x $DIY_P1_SH
+        chmod +x $DIY_P1_SH                             # 赋予执行权限
         cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P1_SH
+        $GITHUB_WORKSPACE/$DIY_P1_SH                    # 执行自定义脚本1（例如添加第三方源）
 
+    # ========== 5. 更新feeds ==========
     - name: Update feeds
-      run: cd openwrt && ./scripts/feeds update -a
+      run: cd openwrt && ./scripts/feeds update -a      # 更新所有feeds源
 
+    # ========== 6. 安装feeds ==========
     - name: Install feeds
-      run: cd openwrt && ./scripts/feeds install -a
+      run: cd openwrt && ./scripts/feeds install -a     # 安装所有feeds软件包
 
+    # ========== 7. 加载自定义配置 ==========
     - name: Load custom configuration
       run: |
+        # 如果存在files目录（自定义文件覆盖），则移动到openwrt目录
         [ -e files ] && mv files openwrt/files
+        # 如果存在.config文件，则覆盖到openwrt/.config
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
-        chmod +x $DIY_P2_SH
+        chmod +x $DIY_P2_SH                             # 赋予执行权限
         cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P2_SH
+        $GITHUB_WORKSPACE/$DIY_P2_SH                    # 执行自定义脚本2（例如修改配置或添加补丁）
 
+    # ========== 8. SSH 调试（可选） ==========
     - name: SSH connection to Actions
-      uses: P3TERX/ssh2actions@v1.0.0
+      uses: P3TERX/ssh2actions@v1.0.0                   # 使用SSH连接工具（可手动调试）
       if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh  != 'false') || contains(github.event.action, 'ssh')
       env:
-        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}   # 用于通知（可选）
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
+    # ========== 9. 下载软件包源码 ==========
     - name: Download package
       id: package
       run: |
         cd openwrt
-        make defconfig
-        make download -j8
+        make defconfig                                # 生成默认配置（确保feeds路径正确）
+        make download -j8                              # 并行下载所有需要的源码包
+        # 查找下载失败的小文件（小于1KB）并列出，然后删除以便重新下载
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
+    # ========== 10. 编译固件 ==========
     - name: Compile the firmware
       id: compile
       run: |
         cd openwrt
-        echo -e "$(nproc) thread compile"
+        echo -e "$(nproc) thread compile"              # 显示CPU核心数
+        # 先尝试全核编译，失败则单核，再失败则单核带详细输出（V=s）
         make -j$(nproc) || make -j1 || make -j1 V=s
-        echo "status=success" >> $GITHUB_OUTPUT
+        echo "status=success" >> $GITHUB_OUTPUT        # 设置输出变量供后续步骤判断
+        # 从.config中提取设备名称（用于文件命名）
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
-        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV   # 时间戳
 
+    # ========== 11. 检查磁盘空间（用于调试） ==========
     - name: Check space usage
       if: (!cancelled())
       run: df -hT
 
-    - name: Upload bin directory
-      uses: actions/upload-artifact@v4
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-      with:
-        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/bin
-
-    # 整理编译好的固件
+    # ========== 13. 整理固件文件（只保留刷机文件） ==========
     - name: Organize files
       id: organize
       if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
         cd openwrt/bin/targets/*/*
+        # 删除不需要的文件夹和文件（如packages、元数据等）
         rm -rf packages
         rm -rf *.buildinfo
         rm -rf *.manifest
         rm -rf *.json
         rm -rf *bl2.bin
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV            # 将固件目录路径存入环境变量
         echo "status=success" >> $GITHUB_OUTPUT
 
+    # ========== 14. 上传整理后的固件目录（作为Artifact） ==========
     - name: Upload firmware directory
       uses: actions/upload-artifact@v4
       if: steps.organize.outputs.status == 'success' && !cancelled()
@@ -152,49 +164,35 @@ jobs:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
 
-    - name: Upload firmware to cowtransfer
-      id: cowtransfer
-      if: steps.organize.outputs.status == 'success' && env.UPLOAD_COWTRANSFER == 'true' && !cancelled()
-      run: |
-        curl -fsSL git.io/file-transfer | sh
-        ./transfer cow --block 2621440 -s -p 64 --no-progress ${FIRMWARE} 2>&1 | tee cowtransfer.log
-        echo "::warning file=cowtransfer.com::$(cat cowtransfer.log | grep https)"
-        echo "url=$(cat cowtransfer.log | grep https | cut -f3 -d" ")" >> $GITHUB_OUTPUT
 
-    - name: Upload firmware to WeTransfer
-      id: wetransfer
-      if: steps.organize.outputs.status == 'success' && env.UPLOAD_WETRANSFER == 'true' && !cancelled()
-      run: |
-        curl -fsSL git.io/file-transfer | sh
-        ./transfer wet -s -p 16 --no-progress ${FIRMWARE} 2>&1 | tee wetransfer.log
-        echo "::warning file=wetransfer.com::$(cat wetransfer.log | grep https)"
-        echo "url=$(cat wetransfer.log | grep https | cut -f3 -d" ")" >> $GITHUB_OUTPUT
-
+    # ========== 17. 生成Release标签和发布说明 ==========
     - name: Generate release tag
       id: tag
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
-        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT   # 用当前时间作为tag
         touch release.txt
-        echo "immortalwrt24.10-6.6_nokia_ea0326gmp" >> release.txt
+        echo "immortalwrt24.10-6.6_nokia_ea0326gmp" >> release.txt      # 设备/固件标识
         echo "后台：192.168.6.1" >> release.txt
         echo "账号：root" >> release.txt
         echo "密码：无" >> release.txt
         echo "编译源码：https://github.com/Yuzhii0718/immortalwrt-mt798x-6.6-padavanonly" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
+    # ========== 18. 上传固件到GitHub Release ==========
     - name: Upload firmware to release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3              # 升级到v3，支持Node.js 24
       if: steps.tag.outputs.status == 'success' && !cancelled()
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}       # 使用自动生成的token
       with:
         tag_name: ${{ steps.tag.outputs.release_tag }}
         body_path: release.txt
-        files: ${{ env.FIRMWARE }}/*
+        files: ${{ env.FIRMWARE }}/*                    # 上传固件目录下的所有文件
 
+    # ========== 19. 清理旧的工作流运行记录（仅保留最近3条） ==========
     - name: Delete workflow runs
       uses: GitRML/delete-workflow-runs@main
       with:
-        retain_days: 1
-        keep_minimum_runs: 3
+        retain_days: 1                                  # 保留近1天的记录
+        keep_minimum_runs: 3                            # 至少保留3条
