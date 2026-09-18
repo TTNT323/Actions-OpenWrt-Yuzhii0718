@@ -81,7 +81,13 @@ jobs:
         with:
           token: ${{ secrets.ACTIONS_TRIGGER_PAT }}
           event-type: Source Code Update
-
+          
+      - name: Checkout current repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.ACTIONS_TRIGGER_PAT }}
+          persist-credentials: true   # 确保后续 git push 用这个 token
+          
       - name: Delete workflow runs
         uses: GitRML/delete-workflow-runs@main
         with:
