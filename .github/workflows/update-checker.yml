@@ -1,20 +1,8 @@
-#
-# Copyright (c) 2019-2021 P3TERX <https://p3terx.com>
-#
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
-#
-# https://github.com/P3TERX/Actions-OpenWrt
-# File: .github/workflows/update-checker.yml
-# Description: Source code update checker
-#
-
 name: Update Checker
 
 env:
   REPO_URL: https://github.com/Yuzhii0718/immortalwrt-mt798x-6.6-padavanonly
   REPO_BRANCH: openwrt-24.10-6.6
-  # 强制使用 Node.js 24 运行 JavaScript Actions
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 on:
@@ -28,28 +16,21 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
-
     permissions:
-      contents: write
+      contents: read
 
     steps:
-      - name: Checkout current repo
-        uses: actions/checkout@v4
-        with:
-          # 用 PAT 拉取，确保后续 push 有权限（避免 GITHUB_TOKEN 权限不足）
-          token: ${{ secrets.ACTIONS_TRIGGER_PAT }}
-
       - name: Get latest upstream commit hash
         id: getHash
         run: |
           git clone --depth 1 $REPO_URL -b $REPO_BRANCH /tmp/upstream
           echo "commitHash=$(git -C /tmp/upstream rev-parse HEAD)" >> $GITHUB_OUTPUT
 
-      - name: Compare with stored hash
+      - name: Compare with stored variable
         id: decide
+        env:
+          STORED: ${{ vars.LAST_COMMIT_HASH }}
         run: |
-          STORED=""
-          [ -f .github/last_commit.txt ] && STORED=$(cat .github/last_commit.txt)
           NEW="${{ steps.getHash.outputs.commitHash }}"
           echo "stored = $STORED"
           echo "new    = $NEW"
@@ -58,22 +39,17 @@ jobs:
             echo "✅ 代码无更新，跳过编译"
           else
             echo "changed=true" >> $GITHUB_OUTPUT
-            echo "$NEW" > .github/last_commit.txt
-            echo "🚀 检测到代码更新，准备触发编译"
+            echo "🚀 检测到代码更新"
           fi
 
-      - name: Commit new hash
+      - name: Update repository variable
         if: steps.decide.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.ACTIONS_TRIGGER_PAT }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .github/last_commit.txt
-          if git diff --cached --quiet; then
-            echo "没有需要提交的变更"
-          else
-            git commit -m "chore: update last commit hash [skip ci]"
-            git push
-          fi
+          gh variable set LAST_COMMIT_HASH \
+            --body "${{ steps.getHash.outputs.commitHash }}" \
+            --repo ${{ github.repository }}
 
       - name: Trigger build
         if: steps.decide.outputs.changed == 'true'
@@ -81,13 +57,7 @@ jobs:
         with:
           token: ${{ secrets.ACTIONS_TRIGGER_PAT }}
           event-type: Source Code Update
-          
-      - name: Checkout current repo
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.ACTIONS_TRIGGER_PAT }}
-          persist-credentials: true   # 确保后续 git push 用这个 token
-          
+
       - name: Delete workflow runs
         uses: GitRML/delete-workflow-runs@main
         with:
