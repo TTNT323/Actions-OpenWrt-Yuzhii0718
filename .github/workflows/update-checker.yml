@@ -20,41 +20,70 @@ env:
 on:
   workflow_dispatch:
   schedule:
-    - cron: 0 11 * * 1
+    # 每天北京时间中午 12:00       	0 12 * * *
+    # 每周一北京时间中午 12:00      	0 12 * * 1
+    # 每周日北京时间中午 12:00	      0 12 * * 0
+    - cron: 0 12 * * 1
 
 jobs:
   check:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write
+
     steps:
+      - name: Checkout current repo
+        uses: actions/checkout@v4
+        with:
+          # 用 PAT 拉取，确保后续 push 有权限（避免 GITHUB_TOKEN 权限不足）
+          token: ${{ secrets.ACTIONS_TRIGGER_PAT }}
 
-    - name: Get Commit Hash
-      id: getHash
-      run: |
-        git clone --depth 1 $REPO_URL -b $REPO_BRANCH .
-        echo "commitHash=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+      - name: Get latest upstream commit hash
+        id: getHash
+        run: |
+          git clone --depth 1 $REPO_URL -b $REPO_BRANCH /tmp/upstream
+          echo "commitHash=$(git -C /tmp/upstream rev-parse HEAD)" >> $GITHUB_OUTPUT
 
-    - name: Compare Commit Hash
-      id: cacheHash
-      uses: actions/cache@v4
-      with:
-        path: .commitHash
-        key: HEAD-${{ steps.getHash.outputs.commitHash }}
+      - name: Compare with stored hash
+        id: decide
+        run: |
+          STORED=""
+          [ -f .github/last_commit.txt ] && STORED=$(cat .github/last_commit.txt)
+          NEW="${{ steps.getHash.outputs.commitHash }}"
+          echo "stored = $STORED"
+          echo "new    = $NEW"
+          if [ "$STORED" = "$NEW" ]; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "✅ 代码无更新，跳过编译"
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "$NEW" > .github/last_commit.txt
+            echo "🚀 检测到代码更新，准备触发编译"
+          fi
 
-    - name: Save New Commit Hash
-      if: steps.cacheHash.outputs.cache-hit != 'true'
-      run: |
-        echo ${{ steps.getHash.outputs.commitHash }} | tee .commitHash
+      - name: Commit new hash
+        if: steps.decide.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/last_commit.txt
+          if git diff --cached --quiet; then
+            echo "没有需要提交的变更"
+          else
+            git commit -m "chore: update last commit hash [skip ci]"
+            git push
+          fi
 
-    - name: Trigger build
-      if: steps.cacheHash.outputs.cache-hit != 'true'
-      uses: peter-evans/repository-dispatch@v3
-      with:
-        token: ${{ secrets.ACTIONS_TRIGGER_PAT }}
-        event-type: Source Code Update
+      - name: Trigger build
+        if: steps.decide.outputs.changed == 'true'
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.ACTIONS_TRIGGER_PAT }}
+          event-type: Source Code Update
 
-    - name: Delete workflow runs
-      uses: GitRML/delete-workflow-runs@main
-      with:
-        retain_days: 1
-        keep_minimum_runs: 1
+      - name: Delete workflow runs
+        uses: GitRML/delete-workflow-runs@main
+        with:
+          retain_days: 1
+          keep_minimum_runs: 1
