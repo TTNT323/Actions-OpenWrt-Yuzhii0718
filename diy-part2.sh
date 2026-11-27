@@ -57,3 +57,19 @@ exit 0
 EOF
 echo "[DIY] 已写入 conntrack expectation 调优到固件 rc.local"
 # ============ 修复结束 ============
+
+# ============ 让 nokia_ea0326gmp 只生成 sysupgrade.bin，不生成 factory.bin ============
+# filogic.mk 中该设备默认 IMAGES := sysupgrade.bin（见 image/Makefile），
+# 设备块里又用 "IMAGES += factory.bin" 追加了 factory。
+# 只在这个设备的 define 块内删掉 factory 两行，不影响其它设备。
+FIRMWARE_MK="target/linux/mediatek/image/filogic.mk"
+if [ -f "$FIRMWARE_MK" ] && grep -q 'define Device/nokia_ea0326gmp' "$FIRMWARE_MK"; then
+  sed -i '/define Device\/nokia_ea0326gmp/,/^endef/{
+    /IMAGES += factory.bin/d
+    /IMAGE\/factory.bin/d
+  }' "$FIRMWARE_MK"
+  echo "[DIY] 已禁用 nokia_ea0326gmp 的 factory.bin，仅保留 sysupgrade.bin"
+else
+  echo "[DIY] 未找到 filogic.mk 或 nokia_ea0326gmp 定义，跳过 factory.bin 禁用"
+fi
+# ============ 结束 ============
