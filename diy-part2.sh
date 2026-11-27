@@ -31,3 +31,29 @@ sed -i 's/ +luci-app-ttyd//g' package/mtk/applications/luci-app-turboacc-mtk/Mak
 #find /tmp/openclash-temp -type d -name "luci-app-openclash" -exec cp -r {} package/ \;
 # 清理临时文件
 #rm -rf /tmp/openclash-temp
+
+# ============ 修复 nf_conntrack: expectation table full 日志刷屏 ============
+# 本脚本在 .config 加载后、make defconfig 前执行，工作目录为 openwrt。
+# 把 expectation 调优写进固件的 /etc/rc.local（系统 init 完成后执行，
+# 此时 nf_conntrack 模块已加载，sysctl 节点一定存在），刷机后开机自动生效。
+cat > package/base-files/files/etc/rc.local <<'EOF'
+#!/bin/sh
+# Put your custom commands here that should be executed once
+# the system init finished.
+
+# --- fix: nf_conntrack expectation table full ---
+# expectation 表默认上限仅 256，UPnP/协议助手极易撑满导致刷屏；调大到 8192
+sysctl -w net.netfilter.nf_conntrack_expect_max=8192 2>/dev/null
+# 缩短 expectation 超时，失效条目快速回收（默认 600s -> 120s）
+[ -e /proc/sys/net/netfilter/nf_conntrack_expect_generic_timeout ] && \
+    sysctl -w net.netfilter.nf_conntrack_expect_generic_timeout=120 2>/dev/null
+[ -e /proc/sys/net/netfilter/nf_conntrack_expect_related_timeout ] && \
+    sysctl -w net.netfilter.nf_conntrack_expect_related_timeout=120 2>/dev/null
+[ -e /proc/sys/net/netfilter/nf_conntrack_expect_helper_timeout ] && \
+    sysctl -w net.netfilter.nf_conntrack_expect_helper_timeout=120 2>/dev/null
+# --- fix end ---
+
+exit 0
+EOF
+echo "[DIY] 已写入 conntrack expectation 调优到固件 rc.local"
+# ============ 修复结束 ============
