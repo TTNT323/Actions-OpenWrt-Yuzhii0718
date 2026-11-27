@@ -32,6 +32,10 @@ sed -i 's/ +luci-app-ttyd//g' package/mtk/applications/luci-app-turboacc-mtk/Mak
 # 清理临时文件
 #rm -rf /tmp/openclash-temp
 
+# 说明：UPnP 组件(luci-app-upnp / luci-i18n-upnp-zh-cn / miniupnpd-nftables)
+# 已在 .config 中关闭，固件内不编译、不打包 miniupnpd；本脚本无需再处理。
+# 这样既去掉了 conntrack expectation 的主要来源，也少一个常驻后台进程。
+
 # ============================================================
 # 硬件加速(turboacc) / IRQ-RPS(mtk-smp)：刻意不改动
 #  * HNAT 与 Fullcone(NAT1) 默认已由 uci-defaults 启用，覆盖源码里那个空的
@@ -77,7 +81,9 @@ cat > package/base-files/files/etc/rc.local <<'EOF'
 # ============================================================
 # 1) conntrack：修复刷屏 + 适配"设备多"的连接规模
 # ============================================================
-# 期望表(expectation)默认上限 256，UPnP/协议助手易撑满导致刷屏
+# UPnP(miniupnpd) 已在 .config 移除，期望表最大的灌注源已消失；
+# 但 FTP/SIP 等协议助手(nathelper)仍会创建 expectation，且默认值仅 256，
+# 故保留此调优作为兜底，避免偶发刷屏。
 sysctl -w net.netfilter.nf_conntrack_expect_max=8192 2>/dev/null
 [ -e /proc/sys/net/netfilter/nf_conntrack_expect_generic_timeout ] && \
     sysctl -w net.netfilter.nf_conntrack_expect_generic_timeout=120 2>/dev/null
@@ -85,10 +91,6 @@ sysctl -w net.netfilter.nf_conntrack_expect_max=8192 2>/dev/null
     sysctl -w net.netfilter.nf_conntrack_expect_related_timeout=120 2>/dev/null
 [ -e /proc/sys/net/netfilter/nf_conntrack_expect_helper_timeout ] && \
     sysctl -w net.netfilter.nf_conntrack_expect_helper_timeout=120 2>/dev/null
-# 连接跟踪主表：默认约 15360，2.4G/IoT 设备多 + P2P/UPnP 时易被打满，
-# 表现为"时好时坏、偶发丢包、新建连接慢"。调大到 65536，按设备数
-# 动态分配内存，不增加功耗；HNAT 快路径的首包仍需走 conntrack，故仍有效。
-sysctl -w net.netfilter.nf_conntrack_max=65536 2>/dev/null
 
 # ============================================================
 # 2) TCP 拥塞控制 + 队列
